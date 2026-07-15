@@ -111,7 +111,7 @@ export function simulate(profile: Profile, returnSampler?: ReturnSampler): SimRe
     const ssBenefit = age >= profile.socialSecurityStartAge ? profile.socialSecurityAnnual * colaFactor : 0;
     const childAge = youngestChildAge(profile, calendarYear);
     const childSsGross =
-      ssBenefit > 0 && childAge !== null && childAge < 18
+      ssBenefit > 0 && childAge !== null && childAge < profile.childSsEndAge
         ? profile.childSocialSecurityAnnual * colaFactor
         : 0;
     const otherIncome = age <= profile.otherIncomeEndAge ? profile.otherIncomeAnnual : 0;
@@ -379,10 +379,16 @@ export function terminalTax(
       bracketIndexRate: profile.assumptions.bracketIndexPct / 100,
     }).tax;
   }
-  // heirTenYear
-  const perYear = traditionalBalance / 10;
+  // heirTenYear — a minor child is an eligible designated beneficiary: small
+  // life-expectancy payouts until 21, THEN the 10-year clock (SECURE Act;
+  // Pub. 590-B). Approximated as an equal spread over (21 − age) + 10 years.
+  // Kiddie tax on pre-21 distributions is not modeled (would raise this a bit).
+  const heirBirthYear = profile.childBirthYears.length ? Math.max(...profile.childBirthYears) : 0;
+  const heirAge = heirBirthYear ? calendarYear - heirBirthYear : 40;
+  const spreadYears = heirAge < 21 ? 21 - heirAge + 10 : 10;
+  const perYear = traditionalBalance / spreadYears;
   let total = 0;
-  for (let index = 0; index < 10; index += 1) {
+  for (let index = 0; index < spreadYears; index += 1) {
     total += federalTax({
       calendarYear: calendarYear + index,
       age: 40,

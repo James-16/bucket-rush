@@ -28,6 +28,7 @@ export function demoProfile(): Profile {
     socialSecurityAnnual: 30_000,
     socialSecurityStartAge: 67,
     childSocialSecurityAnnual: 0,
+    childSsEndAge: 18,
     otherIncomeAnnual: 26_250,
     otherIncomeEndAge: 65,
     otherIncomeIsSelfEmployment: true,

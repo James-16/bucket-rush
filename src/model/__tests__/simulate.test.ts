@@ -23,6 +23,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     socialSecurityAnnual: 30_000,
     socialSecurityStartAge: 67,
     childSocialSecurityAnnual: 0,
+    childSsEndAge: 18,
     otherIncomeAnnual: 0,
     otherIncomeEndAge: 0,
     otherIncomeIsSelfEmployment: false,
@@ -150,6 +151,26 @@ describe("codex-parity features", () => {
     const childTurns18Year = 2024 + 18;
     const after = result.rows.find((r) => r.calendarYear === childTurns18Year + 1);
     expect(after?.childSocialSecurity ?? 0).toBe(0);
+
+    // SSA allows 19 while still a full-time K-12 student — configurable
+    const extended = simulate(makeProfile({ childSocialSecurityAnnual: 12_000, childSsEndAge: 19 }));
+    const at18 = extended.rows.find((r) => r.calendarYear === childTurns18Year)!;
+    expect(at18.childSocialSecurity).toBeGreaterThan(0);
+  });
+
+  it("a minor heir stretches the terminal spread beyond 10 years (lower tax)", () => {
+    // horizon 70: son (born 2024) is ~15 at inheritance → (21-15)+10 = 16-year spread
+    const minorHeir = terminalTax(
+      makeProfile({ horizonAge: 70 }),
+      800_000,
+      { calendarYear: 2039 } as never,
+    );
+    const adultHeir = terminalTax(
+      makeProfile({ childBirthYears: [1995] }),
+      800_000,
+      { calendarYear: 2039 } as never,
+    );
+    expect(minorHeir).toBeLessThan(adultHeir);
   });
 
   it("trump account pays inside its window and stops when empty", () => {

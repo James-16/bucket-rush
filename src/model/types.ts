@@ -104,8 +104,10 @@ export type Profile = {
 
   socialSecurityAnnual: number;
   socialSecurityStartAge: number;
-  /** child's benefit on your record — household cash, not your taxable income; paid while your benefit runs and the child is under 18 */
+  /** child's benefit on your record — household cash, not your taxable income; paid while your benefit runs and the child is under childSsEndAge */
   childSocialSecurityAnnual: number;
+  /** SSA: benefits end at 18, or 19 while a full-time K-12 student */
+  childSsEndAge: number;
   otherIncomeAnnual: number;
   otherIncomeEndAge: number;
   /** true → other income is net self-employment income (SECA tax applies) */
