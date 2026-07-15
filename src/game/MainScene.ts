@@ -57,12 +57,19 @@ export class MainScene extends Phaser.Scene {
     this.input.once("pointerdown", () => unlockAudio());
   }
 
+  private interludeUntil = 0;
+
   private startRun() {
     this.live = new LiveSim(demoProfile());
     this.live.pourPlan = "off";
     this.refreshForecast();
+    this.setInterlude(400);
+  }
+
+  /** Wall-clock interludes: robust even when the tab's animation frames are throttled. */
+  private setInterlude(ms: number) {
     this.phase = "interlude";
-    this.time.delayedCall(400, () => this.nextYear());
+    this.interludeUntil = performance.now() + ms;
   }
 
   private refreshForecast() {
@@ -124,8 +131,7 @@ export class MainScene extends Phaser.Scene {
     }
     if (this.live.gameOver) return this.endRun();
     this.refreshForecast();
-    this.phase = "interlude";
-    this.time.delayedCall(650, () => this.nextYear());
+    this.setInterlude(650);
     if (this.live.age > this.live.profile.horizonAge - 1) {
       this.phase = "gameover";
       this.victory();
@@ -337,6 +343,9 @@ export class MainScene extends Phaser.Scene {
   /* ---------------- render ---------------- */
 
   update() {
+    if (this.phase === "interlude" && performance.now() >= this.interludeUntil) {
+      this.nextYear();
+    }
     this.drawTanksAndFire();
     if (this.stripDirty) this.drawStrip();
     this.hudAge.setText(`AGE ${Math.floor(this.live.age)}   ·   ${this.live.calendarYear}`);
