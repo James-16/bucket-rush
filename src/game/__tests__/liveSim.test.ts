@@ -78,3 +78,53 @@ describe("LiveSim — the fire-season engine", () => {
     expect(sim.balances.spouse).toBeGreaterThanOrEqual(200_000 - 1);
   });
 });
+
+describe("vault pays the pour toll (conversion.taxSource)", () => {
+  function emptyWalletSim(taxSource: "taxable" | "taxableThenSpouse") {
+    const profile = demoProfile();
+    profile.balances = { ...profile.balances, taxable: 0, spouse: 500_000 };
+    profile.conversion = { ...profile.conversion, taxSource };
+    const sim = new LiveSim(profile);
+    sim.pourPlan = "fill22";
+    sim.beginYear();
+    // spouse squirts douse 1:1, so exact-size squirts leave no over-douse
+    // sloshing into the Wallet — it stays truly empty at year end
+    while (sim.fireRemaining > 1) {
+      if (sim.squirt("spouse", sim.fireRemaining).gross <= 0) break;
+    }
+    expect(sim.balances.taxable).toBe(0);
+    return sim;
+  }
+
+  it("default: empty wallet means Sam skims the pour itself", () => {
+    const sim = emptyWalletSim("taxable");
+    const end = sim.endYear();
+    expect(end.poured).toBeGreaterThan(10_000);
+    expect(end.tollFromVault).toBe(0);
+    // Freedom got the pour minus the skimmed toll, then one year of growth
+    expect(sim.balances.roth).toBeCloseTo((end.poured - end.pourToll) * 1.07, -1);
+  });
+
+  it("vault-pays-toll: full pour reaches Freedom, vault drops by the toll", () => {
+    const sim = emptyWalletSim("taxableThenSpouse");
+    const spouseBefore = sim.balances.spouse;
+    const end = sim.endYear();
+    expect(end.poured).toBeGreaterThan(10_000);
+    expect(end.tollFromVault).toBeCloseTo(end.pourToll, 0);
+    // full pour landed in Freedom, then one year of growth
+    expect(sim.balances.roth).toBeCloseTo(end.poured * 1.07, -1);
+    expect(sim.balances.spouse).toBeCloseTo((spouseBefore - end.tollFromVault) * 1.05, -1);
+  });
+
+  it("vault backstop still honors the reserve floor", () => {
+    const profile = demoProfile();
+    profile.balances = { ...profile.balances, taxable: 0 };
+    profile.spouseReserveFloor = profile.balances.spouse; // everything below floor
+    profile.conversion = { ...profile.conversion, taxSource: "taxableThenSpouse" };
+    const sim = new LiveSim(profile);
+    sim.pourPlan = "fill22";
+    sim.beginYear();
+    const end = sim.endYear();
+    expect(end.tollFromVault).toBe(0);
+  });
+});

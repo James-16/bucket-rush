@@ -35,6 +35,7 @@ export class MainScene extends Phaser.Scene {
   private hudTax!: Phaser.GameObjects.Text;
   private fireLabel!: Phaser.GameObjects.Text;
   private pourButtons: { plan: PourPlan; text: Phaser.GameObjects.Text }[] = [];
+  private vaultButton?: Phaser.GameObjects.Text;
   private sam!: Phaser.GameObjects.Container;
   private samSpeech!: Phaser.GameObjects.Text;
   private samShare = 0.22;
@@ -86,6 +87,7 @@ export class MainScene extends Phaser.Scene {
               bracketCeiling: this.live.pourPlan === "fill12" ? 0.12 : 0.22,
               startAge: Math.floor(this.live.age),
               endAge: 74,
+              taxSource: this.live.profile.conversion.taxSource,
             },
     };
     this.forecast = simulate(profile);
@@ -127,7 +129,11 @@ export class MainScene extends Phaser.Scene {
     if (end.poured > 500) {
       SFX.pour();
       SFX.coin();
-      this.samSay(`poured ${moneyShort(end.poured)} → Freedom. Toll ${moneyShort(end.pourToll)}.`);
+      this.samSay(
+        end.tollFromVault > 500
+          ? `poured ${moneyShort(end.poured)} → Freedom. Vault paid my ${moneyShort(end.pourToll)} toll.`
+          : `poured ${moneyShort(end.poured)} → Freedom. Toll ${moneyShort(end.pourToll)}.`,
+      );
     }
     if (this.live.gameOver) return this.endRun();
     this.refreshForecast();
@@ -301,6 +307,31 @@ export class MainScene extends Phaser.Scene {
       this.pourButtons.push({ plan, text });
     });
     this.stylePourButtons();
+
+    // vault-pays-toll toggle: Offshore Vault covers Sam's toll (above its
+    // floor) so the whole pour reaches Freedom instead of Sam skimming it
+    this.vaultButton = this.add
+      .text(1120, 548, "VAULT PAYS TOLL", {
+        fontFamily: "Helvetica, Arial, sans-serif",
+        fontSize: "14px",
+        fontStyle: "800",
+        color: "#e8f6ff",
+        backgroundColor: "#0d0e1a",
+        padding: { x: 12, y: 7 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    this.vaultButton.on("pointerdown", () => {
+      unlockAudio();
+      const on = this.live.profile.conversion.taxSource !== "taxableThenSpouse";
+      this.live.profile = {
+        ...this.live.profile,
+        conversion: { ...this.live.profile.conversion, taxSource: on ? "taxableThenSpouse" : "taxable" },
+      };
+      this.refreshForecast();
+      this.stylePourButtons();
+      this.samSay(on ? "The Vault pays my toll? Full pours it is." : "Back to skimming your pours!");
+    });
   }
 
   private stylePourButtons() {
@@ -308,6 +339,11 @@ export class MainScene extends Phaser.Scene {
       const active = this.live?.pourPlan === plan;
       text.setColor(active ? "#07070f" : "#e8f6ff");
       text.setBackgroundColor(active ? "#2bff9e" : "#0d0e1a");
+    }
+    if (this.vaultButton) {
+      const on = this.live?.profile.conversion.taxSource === "taxableThenSpouse";
+      this.vaultButton.setColor(on ? "#07070f" : "#e8f6ff");
+      this.vaultButton.setBackgroundColor(on ? "#2bff9e" : "#0d0e1a");
     }
   }
 

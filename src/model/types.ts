@@ -73,6 +73,12 @@ export type ConversionPlan = {
   bracketCeiling: number; // e.g. 0.22
   startAge: number;
   endAge: number;
+  /** Where conversion tax comes from when the taxable bucket can't cover it:
+   *  "taxable" shaves the conversion (old behavior); "taxableThenSpouse"
+   *  draws the rest from spouse assets above the reserve floor, keeping the
+   *  full conversion — equivalent to letting household income pay the tax
+   *  first while spouse money backfills expenses. */
+  taxSource: "taxable" | "taxableThenSpouse";
 };
 
 export type Beneficiary = "heirTenYear" | "nraSpouse" | "lumpSum";
@@ -164,6 +170,8 @@ export type YearRow = {
   realizedGains: number;
   /** conversion tax paid out of the taxable bucket's balance (not from cash flow) */
   conversionTaxFromTaxable: number;
+  /** conversion tax the spouse bucket backstopped (taxSource "taxableThenSpouse") */
+  conversionTaxFromSpouse: number;
   tax: number;
   niit: number;
   penalty: number;

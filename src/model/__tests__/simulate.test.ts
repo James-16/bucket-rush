@@ -38,7 +38,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     withdrawalBracketCeiling: 0.22,
     spousePriority: "afterTraditional",
     spouseReserveFloor: 0,
-    conversion: { mode: "none", fixedAmount: 50_000, bracketCeiling: 0.22, startAge: 60, endAge: 74 },
+    conversion: { mode: "none", fixedAmount: 50_000, bracketCeiling: 0.22, startAge: 60, endAge: 74, taxSource: "taxable" },
     beneficiary: "heirTenYear",
     assumptions: {
       bracketIndexPct: 2.3,
@@ -77,7 +77,7 @@ describe("simulate", () => {
 
   it("bracket-fill conversions never cross the ceiling", () => {
     const profile = makeProfile({
-      conversion: { mode: "bracketFill", fixedAmount: 0, bracketCeiling: 0.22, startAge: 60, endAge: 74 },
+      conversion: { mode: "bracketFill", fixedAmount: 0, bracketCeiling: 0.22, startAge: 60, endAge: 74, taxSource: "taxable" },
     });
     const result = simulate(profile);
     for (const row of result.rows.filter((r) => r.conversion > 0)) {
@@ -282,7 +282,7 @@ describe("529 K-12 cap and fractional start ages", () => {
     const result = simulate(
       makeProfile({
         balances: { traditional: 800_000, roth: 0, taxable: 300_000, spouse: 200_000, kids: 0, trump: 0 },
-        conversion: { mode: "fixed", fixedAmount: 80_000, bracketCeiling: 0.22, startAge: 60, endAge: 70 },
+        conversion: { mode: "fixed", fixedAmount: 80_000, bracketCeiling: 0.22, startAge: 60, endAge: 70, taxSource: "taxable" },
       }),
     );
     const conversionYear = result.rows.find((row) => row.conversion > 0)!;
@@ -297,7 +297,7 @@ describe("529 K-12 cap and fractional start ages", () => {
         planStartAge: 57,
         balances: { traditional: 500_000, roth: 0, taxable: 900_000, spouse: 0, kids: 0, trump: 0 },
         extraExpenses: [],
-        conversion: { mode: "fixed", fixedAmount: 50_000, bracketCeiling: 0.22, startAge: 57, endAge: 60 },
+        conversion: { mode: "fixed", fixedAmount: 50_000, bracketCeiling: 0.22, startAge: 57, endAge: 60, taxSource: "taxable" },
       }),
     );
     const conversionYear = convertOnly.rows.find((row) => row.age === 57)!;
@@ -310,7 +310,7 @@ describe("529 K-12 cap and fractional start ages", () => {
         planStartAge: 57,
         balances: { traditional: 500_000, roth: 0, taxable: 0, spouse: 0, kids: 0, trump: 0 },
         extraExpenses: [],
-        conversion: { mode: "none", fixedAmount: 0, bracketCeiling: 0.22, startAge: 57, endAge: 60 },
+        conversion: { mode: "none", fixedAmount: 0, bracketCeiling: 0.22, startAge: 57, endAge: 60, taxSource: "taxable" },
       }),
     );
     const spendYear = spendOnly.rows.find((row) => row.age === 57)!;
@@ -408,5 +408,114 @@ describe("strategy lab", () => {
     expect(winner.result.afterTaxEndingWealth).toBeGreaterThanOrEqual(
       baseline.result.afterTaxEndingWealth - 1,
     );
+  });
+});
+
+describe("income is credited before bucket draws (header order #1)", () => {
+  it("spouse-first only covers what after-tax income cannot", () => {
+    const result = simulate(
+      makeProfile({
+        spousePriority: "beforeTraditional",
+        spouseReserveFloor: 0,
+        balances: { traditional: 800_000, roth: 0, taxable: 100_000, spouse: 5_000_000, kids: 0, trump: 0 },
+        otherIncomeAnnual: 50_000,
+        otherIncomeEndAge: 120,
+        extraExpenses: [],
+      }),
+    );
+    const firstYear = result.rows[0];
+    // spouse pays the need net of after-tax income, not the gross need
+    expect(firstYear.fromSpouse).toBeLessThan(firstYear.spending);
+    expect(firstYear.fromSpouse + firstYear.otherIncome - firstYear.tax).toBeCloseTo(firstYear.spending, 0);
+    // income is consumed by spending, not swept into the taxable bucket
+    expect(firstYear.fromTaxable).toBe(0);
+    expect(firstYear.surplusReinvested).toBeLessThan(1);
+  });
+
+  it("does not sell taxable (realizing gains) for dollars income already covers", () => {
+    const result = simulate(
+      makeProfile({
+        taxableGainPortionPct: 40,
+        otherIncomeAnnual: 120_000,
+        otherIncomeEndAge: 120,
+        baseSpending: 60_000,
+        extraExpenses: [],
+      }),
+    );
+    const firstYear = result.rows[0];
+    expect(firstYear.fromTaxable).toBe(0);
+    expect(firstYear.realizedGains).toBe(0);
+    // the genuine income surplus still sweeps into taxable
+    expect(firstYear.surplusReinvested).toBeGreaterThan(0);
+  });
+
+  it("still sells taxable when income falls short, sized net of income", () => {
+    const result = simulate(
+      makeProfile({
+        taxableGainPortionPct: 40,
+        otherIncomeAnnual: 30_000,
+        otherIncomeEndAge: 120,
+        balances: { traditional: 0, roth: 0, taxable: 2_000_000, spouse: 0, kids: 0, trump: 0 },
+        extraExpenses: [],
+      }),
+    );
+    const firstYear = result.rows[0];
+    expect(firstYear.fromTaxable).toBeGreaterThan(0);
+    // after-tax income + proceeds just cover spending: no refund churn
+    expect(firstYear.fromTaxable).toBeLessThan(firstYear.spending);
+    expect(firstYear.surplusReinvested).toBeLessThan(1);
+    expect(firstYear.shortfall).toBe(0);
+  });
+});
+
+describe("conversion tax source", () => {
+  const conversionSetup = {
+    spousePriority: "beforeTraditional" as const,
+    spouseReserveFloor: 0,
+    balances: { traditional: 800_000, roth: 0, taxable: 0, spouse: 3_000_000, kids: 0, trump: 0 },
+    otherIncomeAnnual: 0,
+    conversion: {
+      mode: "fixed" as const,
+      fixedAmount: 100_000,
+      bracketCeiling: 0.22,
+      startAge: 60,
+      endAge: 74,
+      taxSource: "taxable" as const,
+    },
+  };
+
+  it("default: an empty taxable bucket shaves the conversion", () => {
+    const result = simulate(makeProfile(conversionSetup));
+    const firstYear = result.rows[0];
+    expect(firstYear.conversion).toBe(100_000);
+    expect(firstYear.conversionTaxFromSpouse).toBe(0);
+    // tax came out of the converted amount: Roth got less than the full conversion
+    expect(firstYear.balances.roth).toBeLessThan(100_000);
+  });
+
+  it("taxableThenSpouse: spouse backstops the tax so the full conversion reaches Roth", () => {
+    const result = simulate(
+      makeProfile({
+        ...conversionSetup,
+        conversion: { ...conversionSetup.conversion, taxSource: "taxableThenSpouse" },
+      }),
+    );
+    const firstYear = result.rows[0];
+    expect(firstYear.conversion).toBe(100_000);
+    expect(firstYear.conversionTaxFromSpouse).toBeGreaterThan(0);
+    // full conversion lands in Roth (then grows 5% at year end)
+    expect(firstYear.balances.roth).toBeCloseTo(100_000 * 1.05, 0);
+  });
+
+  it("taxableThenSpouse still respects the spouse reserve floor", () => {
+    const floor = simulate(
+      makeProfile({
+        ...conversionSetup,
+        spouseReserveFloor: 10_000_000, // everything is below the floor
+        conversion: { ...conversionSetup.conversion, taxSource: "taxableThenSpouse" },
+      }),
+    );
+    // spouse untouchable -> behaves like the default: tax shaves the conversion
+    expect(floor.rows[0].conversionTaxFromSpouse).toBe(0);
   });
 });

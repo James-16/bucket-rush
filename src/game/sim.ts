@@ -43,7 +43,7 @@ export function demoProfile(): Profile {
     withdrawalBracketCeiling: 0.22,
     spousePriority: "beforeTraditional",
     spouseReserveFloor: 0,
-    conversion: { mode: "none", fixedAmount: 50_000, bracketCeiling: 0.22, startAge: 58, endAge: 74 },
+    conversion: { mode: "none", fixedAmount: 50_000, bracketCeiling: 0.22, startAge: 58, endAge: 74, taxSource: "taxable" },
     beneficiary: "heirTenYear",
     assumptions: {
       bracketIndexPct: 2.3,
@@ -125,6 +125,7 @@ export class GameSim {
               bracketCeiling: plan === "fill12" ? 0.12 : 0.22,
               startAge,
               endAge: 74,
+              taxSource: this.profile.conversion.taxSource,
             },
     };
     this.result = simulate(this.profile);

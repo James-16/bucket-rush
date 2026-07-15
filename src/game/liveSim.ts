@@ -31,6 +31,7 @@ export type YearStart = {
 export type YearEnd = {
   poured: number;
   pourToll: number;
+  tollFromVault: number;
   taxThisYear: number;
 };
 
@@ -198,6 +199,7 @@ export class LiveSim {
 
     let poured = 0;
     let pourToll = 0;
+    let tollFromVault = 0;
     if (this.pourPlan !== "off" && this.balances.traditional > 0 && !this.gameOver) {
       const ceiling = this.pourPlan === "fill12" ? 0.12 : 0.22;
       poured = Math.min(
@@ -209,7 +211,13 @@ export class LiveSim {
         pourToll = Math.max(0, this.recomputeTax());
         const fromWallet = Math.min(this.balances.taxable, pourToll);
         this.balances.taxable -= fromWallet;
-        const skim = pourToll - fromWallet; // wallet empty → Sam skims the pour itself
+        // vault-pays-toll option: the Offshore Vault (above its floor) covers
+        // what the Wallet can't, so the full pour reaches Freedom
+        if (this.profile.conversion.taxSource === "taxableThenSpouse") {
+          tollFromVault = Math.min(this.available("spouse"), pourToll - fromWallet);
+          this.balances.spouse -= tollFromVault;
+        }
+        const skim = pourToll - fromWallet - tollFromVault; // still short → Sam skims the pour itself
         this.balances.traditional -= poured;
         this.balances.roth += Math.max(0, poured - skim);
         this.totalPoured += poured;
@@ -226,7 +234,7 @@ export class LiveSim {
       this.balances[key] = Math.max(0, this.balances[key]) * (1 + growth[key] / 100);
     });
     this.yearIndex += 1;
-    return { poured, pourToll, taxThisYear };
+    return { poured, pourToll, tollFromVault, taxThisYear };
   }
 
   householdTotal(): number {

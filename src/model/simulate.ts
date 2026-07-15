@@ -152,19 +152,38 @@ export function simulate(profile: Profile, returnSampler?: ReturnSampler): SimRe
     balances.trump -= fromTrump;
     need -= fromTrump;
 
-    // 3. spouse-first option (never below the reserve floor)
+    // 3. spouse-first option (never below the reserve floor). Per the header
+    //    order, after-tax SS + other income covers spending before spouse
+    //    money does — estimated with no bucket draws yet, so the estimate is
+    //    exact except when realized gains later shift the tax.
     const spouseAvailable = () => Math.max(0, balances.spouse - profile.spouseReserveFloor);
+    const incomeAfterTax = Math.max(0, ssBenefit + otherIncome - taxFor(ctx, 0, 0, true, age).tax);
     let fromSpouse = 0;
     if (profile.spousePriority === "beforeTraditional") {
-      fromSpouse = Math.min(spouseAvailable(), need);
+      fromSpouse = Math.min(spouseAvailable(), Math.max(0, need - incomeAfterTax));
       balances.spouse -= fromSpouse;
       need -= fromSpouse;
     }
 
-    // 4. taxable bucket — cashNeed is what income + US buckets must now cover
+    // 4. taxable bucket — cashNeed is what income + US buckets must now cover.
+    //    Sell only enough that after-tax income + proceeds meet the need;
+    //    selling the gross need would realize gains on dollars income already
+    //    covers, then sweep the excess straight back into the same bucket.
     const cashNeed = need;
     const gainShare = Math.max(0, Math.min(100, profile.taxableGainPortionPct)) / 100;
-    const fromTaxable = Math.min(balances.taxable, cashNeed);
+    const deliveredFromTaxable = (amount: number) =>
+      ssBenefit + otherIncome + amount - taxFor(ctx, 0, amount * gainShare, true, age).tax;
+    let fromTaxable = 0;
+    if (deliveredFromTaxable(0) < cashNeed && balances.taxable > 0) {
+      let low = 0;
+      let high = balances.taxable;
+      for (let iteration = 0; iteration < 60; iteration += 1) {
+        const midpoint = (low + high) / 2;
+        if (deliveredFromTaxable(midpoint) >= cashNeed) high = midpoint;
+        else low = midpoint;
+      }
+      fromTaxable = Math.min(balances.taxable, high);
+    }
     balances.taxable -= fromTaxable;
     const realizedGains = fromTaxable * gainShare;
 
@@ -228,6 +247,7 @@ export function simulate(profile: Profile, returnSampler?: ReturnSampler): SimRe
     // 8. Roth conversion window (after spending; RMDs can never be converted)
     let conversion = 0;
     let conversionTaxFromTaxable = 0;
+    let conversionTaxFromSpouse = 0;
     if (
       profile.conversion.mode !== "none" &&
       age >= profile.conversion.startAge &&
@@ -256,11 +276,17 @@ export function simulate(profile: Profile, returnSampler?: ReturnSampler): SimRe
         // penalty applies to the spending withdrawal only — never the conversion
         const withConversion = taxFor(ctx, fromTraditional + conversion, realizedGains, true, age, fromTraditional);
         const conversionTax = Math.max(0, withConversion.tax - taxResult.tax);
-        // pay conversion tax from taxable bucket if possible, else shave the conversion
+        // pay conversion tax from the taxable bucket, then (if opted in) from
+        // spouse assets above the reserve floor; whatever is still short
+        // shaves the conversion
         const paidFromTaxable = Math.min(balances.taxable, conversionTax);
         balances.taxable -= paidFromTaxable;
         conversionTaxFromTaxable = paidFromTaxable;
-        const shortTax = conversionTax - paidFromTaxable;
+        if (profile.conversion.taxSource === "taxableThenSpouse") {
+          conversionTaxFromSpouse = Math.min(spouseAvailable(), conversionTax - paidFromTaxable);
+          balances.spouse -= conversionTaxFromSpouse;
+        }
+        const shortTax = conversionTax - paidFromTaxable - conversionTaxFromSpouse;
         balances.traditional -= conversion;
         balances.roth += Math.max(0, conversion - shortTax);
         taxResult = withConversion;
@@ -304,6 +330,7 @@ export function simulate(profile: Profile, returnSampler?: ReturnSampler): SimRe
       surplusReinvested,
       realizedGains,
       conversionTaxFromTaxable,
+      conversionTaxFromSpouse,
       tax: taxResult.tax,
       niit: taxResult.niit,
       penalty: taxResult.penalty,
