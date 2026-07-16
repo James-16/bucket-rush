@@ -97,6 +97,8 @@ export type Profile = {
 
   married: boolean;
   spouseIsNRA: boolean;
+  /** enables spouse-side age-65+ deductions on a joint return when set */
+  spouseBirthYear?: number;
   livesWithSpouse: boolean;
   filingStatus: FilingStatus;
   childBirthYears: number[];

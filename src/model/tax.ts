@@ -8,9 +8,10 @@
  */
 
 import {
+  ADDITIONAL_MEDICARE,
   BASE_TAX_YEAR,
   CHILD_TAX_CREDIT,
-  CTC_PHASEOUT_RATE,
+  CTC_PHASEOUT_PER_1000,
   EARLY_WITHDRAWAL_AGE,
   EARLY_WITHDRAWAL_PENALTY,
   NIIT_RATE,
@@ -28,6 +29,8 @@ export type TaxInput = {
   filingStatus: FilingStatus;
   /** MFS + lived with spouse at any time during the year → $0 SS thresholds */
   livesWithSpouse: boolean;
+  /** MFJ only: spouse is 65+ this year → second aged-65 addition + second senior bonus */
+  spouseIs65Plus?: boolean;
   /** traditional IRA withdrawals + Roth conversions (ordinary income) */
   iraOrdinaryIncome: number;
   /** portion of iraOrdinaryIncome distributed before age 59.5 (10% penalty) */
@@ -151,13 +154,19 @@ export function federalTax(input: TaxInput): TaxResult {
     rate: bracket.rate,
   }));
 
-  // SECA tax on net self-employment income; half of it is an above-the-line deduction.
+  // SECA tax on net self-employment income; half of it is an above-the-line
+  // deduction. The 0.9% Additional Medicare Tax (§3101(b)(2)) rides on top —
+  // frozen thresholds, no wage cap, and excluded from the half deduction.
   const seIncome = Math.max(0, input.selfEmploymentIncome ?? 0);
   const seEarnings = seIncome * SE_TAX.netEarningsFactor;
-  const seTax =
+  const baseSeTax =
     Math.min(seEarnings, SE_TAX.wageBase2026 * factor) * SE_TAX.socialSecurityRate +
     seEarnings * SE_TAX.medicareRate;
-  const halfSeDeduction = seTax / 2;
+  const additionalMedicare =
+    ADDITIONAL_MEDICARE.rate *
+    Math.max(0, seEarnings - ADDITIONAL_MEDICARE.threshold[input.filingStatus]);
+  const seTax = baseSeTax + additionalMedicare;
+  const halfSeDeduction = baseSeTax / 2;
 
   const otherIncomeForSs =
     input.iraOrdinaryIncome + input.otherOrdinaryIncome + seIncome - halfSeDeduction +
@@ -174,14 +183,28 @@ export function federalTax(input: TaxInput): TaxResult {
     input.shortTermGains + taxableSs;
   const agi = Math.max(0, ordinaryIncome + input.longTermGains);
 
-  // Standard deduction: base + 65+ addition (both indexed) + OBBBA senior bonus (2025–2028).
-  let deduction = (config.standardDeduction + (input.age >= 65 ? config.aged65Extra : 0)) * factor;
+  // Standard deduction: base + 65+ addition per eligible person (both indexed)
+  // + OBBBA senior bonus (2025–2028). A joint return earns the aged-65 extra
+  // and the $6k bonus once per 65+ spouse; MFS filers are statutorily barred
+  // from the bonus (married claimants must file jointly).
+  const spouse65 = input.filingStatus === "mfj" && input.spouseIs65Plus === true;
+  let deduction =
+    (config.standardDeduction +
+      (input.age >= 65 ? config.aged65Extra : 0) +
+      (spouse65 ? config.aged65Extra : 0)) *
+    factor;
   let seniorBonus = 0;
-  if (input.age >= 65 && input.calendarYear <= SENIOR_BONUS.lastYear) {
-    const start =
-      input.filingStatus === "mfj" ? SENIOR_BONUS.magiPhaseoutStartMfj : SENIOR_BONUS.magiPhaseoutStart;
-    seniorBonus = Math.max(0, SENIOR_BONUS.amount - Math.max(0, agi - start) * SENIOR_BONUS.phaseoutRate);
-    deduction += seniorBonus;
+  if (input.calendarYear <= SENIOR_BONUS.lastYear && input.filingStatus !== "mfs") {
+    const eligible = (input.age >= 65 ? 1 : 0) + (spouse65 ? 1 : 0);
+    if (eligible > 0) {
+      const start =
+        input.filingStatus === "mfj" ? SENIOR_BONUS.magiPhaseoutStartMfj : SENIOR_BONUS.magiPhaseoutStart;
+      seniorBonus = Math.max(
+        0,
+        eligible * SENIOR_BONUS.amount - Math.max(0, agi - start) * SENIOR_BONUS.phaseoutRate,
+      );
+      deduction += seniorBonus;
+    }
   }
 
   const ordinaryTaxableIncome = Math.max(0, ordinaryIncome - deduction);
@@ -206,11 +229,13 @@ export function federalTax(input: TaxInput): TaxResult {
 
   // Child tax credit (nonrefundable here — conservative) + other-dependent credit.
   // §24: the credit AMOUNT is indexed post-OBBBA, but the $200k/$400k phaseout
-  // thresholds are statutorily frozen — do NOT index them.
+  // thresholds are statutorily frozen — do NOT index them. The phaseout is a
+  // staircase: $50 per $1,000 or fraction thereof over the threshold.
   const maxCredit =
     input.childrenUnder17 * CHILD_TAX_CREDIT * factor +
     input.otherDependents * OTHER_DEPENDENT_CREDIT;
-  const phaseout = Math.max(0, agi - config.ctcPhaseoutStart) * CTC_PHASEOUT_RATE;
+  const ctcExcess = Math.max(0, agi - config.ctcPhaseoutStart);
+  const phaseout = ctcExcess > 0 ? Math.ceil(ctcExcess / 1_000) * CTC_PHASEOUT_PER_1000 : 0;
   const availableCredit = Math.max(0, maxCredit - phaseout);
   const taxBeforeCredits = ordinaryTax + ltcgTax;
   const credits = Math.min(taxBeforeCredits, availableCredit);

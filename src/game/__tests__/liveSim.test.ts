@@ -79,6 +79,53 @@ describe("LiveSim — the fire-season engine", () => {
   });
 });
 
+describe("the bouncer guards the Freedom Tank (§408A 5-year conversion rule)", () => {
+  /** convert at 58 via fill12, dousing with the vault so the wallet pays the toll */
+  function convertAt58() {
+    const sim = freshSim();
+    sim.pourPlan = "fill12";
+    sim.beginYear();
+    while (sim.fireRemaining > 1) {
+      if (sim.squirt("spouse", sim.fireRemaining).gross <= 0) break;
+    }
+    const end = sim.endYear(); // pours at 58 → sim is now at age 59
+    expect(end.poured).toBeGreaterThan(10_000);
+    expect(sim.balances.roth).toBeGreaterThan(10_000);
+    return sim;
+  }
+
+  it("charges 10% recapture on young conversion money drawn before 59.5", () => {
+    const sim = convertAt58();
+    sim.beginYear(); // age 59: converted dollars are 1 tax year old
+    const squirt = sim.squirt("roth", 10_000);
+    expect(squirt.bouncerTook).toBeCloseTo(1_000, 0);
+    expect(squirt.samTook).toBe(0); // conversion basis was already taxed — penalty only
+    expect(squirt.doused).toBeCloseTo(9_000, 0);
+  });
+
+  it("lets the same dollars out free once 59.5 has passed", () => {
+    const sim = convertAt58();
+    sim.beginYear(); // 59
+    sim.endYear();
+    sim.beginYear(); // 60 — recapture only bites under 59.5
+    const squirt = sim.squirt("roth", 10_000);
+    expect(squirt.gross).toBeCloseTo(10_000, 0);
+    expect(squirt.bouncerTook).toBe(0);
+    expect(squirt.samTook).toBe(0);
+  });
+
+  it("treats the starting Roth balance as old money — never penalized", () => {
+    const profile = demoProfile();
+    profile.balances = { ...profile.balances, roth: 50_000 };
+    const sim = new LiveSim(profile);
+    sim.beginYear(); // age 58, but this money predates the game
+    const squirt = sim.squirt("roth", 20_000);
+    expect(squirt.gross).toBeCloseTo(20_000, 0);
+    expect(squirt.bouncerTook).toBe(0);
+    expect(squirt.samTook).toBe(0);
+  });
+});
+
 describe("vault pays the pour toll (conversion.taxSource)", () => {
   function emptyWalletSim(taxSource: "taxable" | "taxableThenSpouse") {
     const profile = demoProfile();

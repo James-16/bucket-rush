@@ -48,6 +48,14 @@ export class LiveSim {
   private iraDrawn = 0;
   private iraSpent = 0; // portion subject to the pre-59.5 bouncer
   private gainsRealized = 0;
+  // Roth ordering rules (§408A(d)(4)): contributions out first, then
+  // conversions FIFO, then earnings. Conversion dollars younger than 5 tax
+  // years pay the bouncer's 10% recapture if drawn before 59.5; non-qualified
+  // earnings pay Sam AND the bouncer. Starting Roth balance counts as old
+  // money (basis), and 59.5+ is treated as fully qualified — the account
+  // 5-year clock is assumed met by then.
+  private rothOldMoney: number;
+  private conversionLedger: { year: number; remaining: number }[] = [];
   private ssBenefit = 0;
   private otherIncome = 0;
   private lastTax = 0;
@@ -57,6 +65,7 @@ export class LiveSim {
   constructor(profile: Profile) {
     this.profile = profile;
     this.balances = { ...profile.balances };
+    this.rothOldMoney = profile.balances.roth;
     this.rmdAge = rmdStartAge(profile.birthYear);
     this.startYear =
       BASE_TAX_YEAR + Math.max(0, Math.round(profile.planStartAge - (BASE_TAX_YEAR - profile.birthYear)));
@@ -77,6 +86,8 @@ export class LiveSim {
       age: this.age,
       filingStatus: p.filingStatus,
       livesWithSpouse: p.livesWithSpouse,
+      spouseIs65Plus:
+        p.spouseBirthYear !== undefined && this.calendarYear - p.spouseBirthYear >= 65,
       iraOrdinaryIncome: this.iraDrawn,
       earlyDistribution: this.age < 59.5 ? this.iraSpent : 0,
       otherOrdinaryIncome: p.otherIncomeIsSelfEmployment ? 0 : this.otherIncome,
@@ -177,6 +188,30 @@ export class LiveSim {
     } else if (bucket === "taxable") {
       this.gainsRealized += gross * (this.profile.taxableGainPortionPct / 100);
       samTook = Math.max(0, this.recomputeTax());
+    } else if (bucket === "roth") {
+      // ordering: old money first, then conversions FIFO, then earnings
+      let left = gross;
+      const fromOld = Math.min(left, this.rothOldMoney);
+      this.rothOldMoney -= fromOld;
+      left -= fromOld;
+      let youngConversions = 0;
+      for (const vintage of this.conversionLedger) {
+        if (left <= 0) break;
+        const take = Math.min(left, vintage.remaining);
+        vintage.remaining -= take;
+        left -= take;
+        if (this.calendarYear - vintage.year < 5) youngConversions += take;
+      }
+      this.conversionLedger = this.conversionLedger.filter((vintage) => vintage.remaining > 0.01);
+      const earnings = left;
+      if (this.age < 59.5 && youngConversions + earnings > 0) {
+        this.iraDrawn += earnings; // non-qualified earnings are ordinary income
+        this.iraSpent += youngConversions + earnings; // both face the bouncer's 10%
+        const delta = this.recomputeTax();
+        const penaltyPart = (youngConversions + earnings) * 0.1;
+        bouncerTook = Math.min(delta, penaltyPart);
+        samTook = Math.max(0, delta - bouncerTook);
+      }
     }
     const doused = Math.max(0, gross - samTook - bouncerTook);
     const applied = Math.min(this.fireRemaining, doused);
@@ -219,7 +254,10 @@ export class LiveSim {
         }
         const skim = pourToll - fromWallet - tollFromVault; // still short → Sam skims the pour itself
         this.balances.traditional -= poured;
-        this.balances.roth += Math.max(0, poured - skim);
+        const landed = Math.max(0, poured - skim);
+        this.balances.roth += landed;
+        // stamp the conversion's tax-year vintage for the 5-year recapture rule
+        if (landed > 0) this.conversionLedger.push({ year: this.calendarYear, remaining: landed });
         this.totalPoured += poured;
       } else {
         poured = 0;

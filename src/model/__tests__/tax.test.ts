@@ -94,6 +94,19 @@ describe("child tax credit", () => {
   });
 });
 
+describe("CTC phaseout staircase (§24(b): $50 per $1,000 or fraction thereof)", () => {
+  const credits = (agi: number) =>
+    federalTax({ ...base, iraOrdinaryIncome: agi, childrenUnder17: 1 }).credits;
+
+  it("steps at every $1,000 boundary instead of sloping", () => {
+    expect(credits(200_000)).toBeCloseTo(2_200, 5); // exactly at threshold: no phaseout
+    expect(credits(200_001)).toBeCloseTo(2_150, 5); // $1 over → full $50 step
+    expect(credits(200_999)).toBeCloseTo(2_150, 5); // same fraction of $1,000
+    expect(credits(201_000)).toBeCloseTo(2_150, 5); // exactly one full $1,000
+    expect(credits(201_001)).toBeCloseTo(2_100, 5); // next fraction begins
+  });
+});
+
 describe("CTC phaseout thresholds are frozen (§24), only the amount indexes", () => {
   it("same nominal AGI phases out identically in 2026 and 2046", () => {
     // AGI $244,000 → $44,000 over the frozen $200k threshold → $2,200 phaseout
@@ -128,7 +141,28 @@ describe("self-employment tax (SECA)", () => {
     const big = federalTax({ ...base, selfEmploymentIncome: 400_000 });
     const uncapped = 400_000 * 0.9235 * 0.153;
     expect(big.seTax).toBeLessThan(uncapped);
-    expect(big.seTax).toBeCloseTo(184_500 * 0.124 + 400_000 * 0.9235 * 0.029, -2);
+    const baseSeca = 184_500 * 0.124 + 400_000 * 0.9235 * 0.029;
+    const additionalMedicare = 0.009 * (400_000 * 0.9235 - 200_000); // HoH threshold
+    expect(big.seTax).toBeCloseTo(baseSeca + additionalMedicare, -2);
+  });
+});
+
+describe("Additional Medicare Tax (§3101(b)(2))", () => {
+  it("adds 0.9% on SE earnings over the frozen filing-status threshold", () => {
+    // mfs threshold is $125k, not $200k
+    const mfs = federalTax({ ...base, filingStatus: "mfs", selfEmploymentIncome: 150_000 });
+    const seEarnings = 150_000 * 0.9235; // 138,525
+    const baseSeca = seEarnings * 0.153;
+    expect(mfs.seTax).toBeCloseTo(baseSeca + 0.009 * (seEarnings - 125_000), 0);
+  });
+
+  it("is zero below the threshold and excluded from the half-SE deduction", () => {
+    const below = federalTax({ ...base, selfEmploymentIncome: 100_000 });
+    expect(below.seTax).toBeCloseTo(100_000 * 0.9235 * 0.153, 0);
+    // AGI reflects half of BASE SECA only — the 0.9% never reduces income
+    const big = federalTax({ ...base, selfEmploymentIncome: 400_000 });
+    const baseSeca = 184_500 * 0.124 + 400_000 * 0.9235 * 0.029;
+    expect(big.agi).toBeCloseTo(400_000 - baseSeca / 2, 0);
   });
 });
 
@@ -148,6 +182,25 @@ describe("age 65+ deductions", () => {
     const highIncome = federalTax({ ...base, age: 66, calendarYear: 2028, iraOrdinaryIncome: 100_000 });
     // AGI 100k → 25k over 75k → reduce 1,500
     expect(highIncome.seniorBonusDeduction).toBeCloseTo(4_500, 0);
+  });
+
+  it("MFS gets no senior bonus — married claimants must file jointly", () => {
+    const mfs = federalTax({
+      ...base, filingStatus: "mfs", age: 66, calendarYear: 2028, iraOrdinaryIncome: 60_000,
+    });
+    expect(mfs.seniorBonusDeduction).toBe(0);
+  });
+
+  it("MFJ earns the bonus and the aged-65 extra once per 65+ spouse", () => {
+    const mfj = { ...base, filingStatus: "mfj" as const, calendarYear: 2028, iraOrdinaryIncome: 80_000 };
+    const bothOver = federalTax({ ...mfj, age: 66, spouseIs65Plus: true });
+    const selfOnly = federalTax({ ...mfj, age: 66, spouseIs65Plus: false });
+    const spouseOnly = federalTax({ ...mfj, age: 60, spouseIs65Plus: true });
+    expect(bothOver.seniorBonusDeduction).toBe(12_000);
+    expect(selfOnly.seniorBonusDeduction).toBe(6_000);
+    expect(spouseOnly.seniorBonusDeduction).toBe(6_000);
+    // second spouse adds their $1,650 aged-65 extra on top of the second bonus
+    expect(bothOver.standardDeduction - selfOnly.standardDeduction).toBeCloseTo(1_650 + 6_000, 0);
   });
 });
 

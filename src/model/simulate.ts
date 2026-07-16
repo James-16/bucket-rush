@@ -121,6 +121,8 @@ export function simulate(profile: Profile, returnSampler?: ReturnSampler): SimRe
       age,
       filingStatus: profile.filingStatus,
       livesWithSpouse: profile.livesWithSpouse,
+      spouseIs65Plus:
+        profile.spouseBirthYear !== undefined && calendarYear - profile.spouseBirthYear >= 65,
       otherOrdinaryIncome: profile.otherIncomeIsSelfEmployment ? 0 : otherIncome,
       selfEmploymentIncome: profile.otherIncomeIsSelfEmployment ? otherIncome : 0,
       socialSecurityBenefit: ssBenefit,
@@ -395,6 +397,8 @@ export function terminalTax(
       age: 80,
       filingStatus: profile.filingStatus,
       livesWithSpouse: profile.livesWithSpouse,
+      spouseIs65Plus:
+        profile.spouseBirthYear !== undefined && calendarYear - profile.spouseBirthYear >= 65,
       iraOrdinaryIncome: traditionalBalance,
       earlyDistribution: 0,
       otherOrdinaryIncome: 0,

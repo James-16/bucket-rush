@@ -171,8 +171,8 @@ export function suggestionsFor(
       id: "se-tax",
       kind: "info",
       title: "Self-employment tax follows you everywhere",
-      body: `The model adds ~15.3% SECA tax on your ${Math.round(profile.otherIncomeAnnual).toLocaleString()} of self-employment income (with the half-SECA deduction). Living abroad doesn't help: the foreign earned income exclusion covers income tax only, and Hong Kong has no totalization agreement with the US. The upside: it keeps building your Social Security record.`,
-      why: "IRC §1401 (SECA); FEIE (§911) excludes income tax, not self-employment tax; SECA relief abroad requires a totalization agreement, which the US and Hong Kong don't have.",
+      body: `The model adds ~15.3% SECA tax on your ${Math.round(profile.otherIncomeAnnual).toLocaleString()} of self-employment income (with the half-SECA deduction). Living abroad doesn't help: the foreign earned income exclusion covers income tax only, and Hong Kong has no totalization agreement with the US. Note the model does NOT apply the FEIE to income tax either — the Form 2555 stacking rule means excluded income still fills the bottom brackets, so conversion costs and headroom barely change; baseline tax on this income is just slightly overstated. The upside: it keeps building your Social Security record.`,
+      why: "IRC §1401 (SECA); FEIE (§911) excludes income tax, not self-employment tax, and is deliberately unmodeled — stacking makes it nearly a wash for bracket planning; SECA relief abroad requires a totalization agreement, which the US and Hong Kong don't have.",
     });
   }
 

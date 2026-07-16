@@ -118,13 +118,18 @@ export const TAX_YEAR_2026: Record<FilingStatus, StatusConfig> = {
 
 export const CHILD_TAX_CREDIT = 2_200; // per qualifying child under 17 (indexed post-OBBBA)
 export const OTHER_DEPENDENT_CREDIT = 500; // not indexed
-export const CTC_PHASEOUT_RATE = 0.05; // $50 per $1,000 over threshold
+/** §24(b): $50 per $1,000 (or fraction thereof) of MAGI over the threshold — a step, not a slope */
+export const CTC_PHASEOUT_PER_1000 = 50;
 
 export const NIIT_RATE = 0.038;
 export const EARLY_WITHDRAWAL_PENALTY = 0.1;
 export const EARLY_WITHDRAWAL_AGE = 59.5;
 
-/** OBBBA senior bonus deduction — tax years 2025 through 2028 only. */
+/**
+ * OBBBA senior bonus deduction — tax years 2025 through 2028 only.
+ * $6,000 per eligible individual 65+; married taxpayers must file JOINTLY to
+ * claim it (MFS gets $0), and an MFJ couple with both spouses 65+ gets $12,000.
+ */
 export const SENIOR_BONUS = {
   amount: 6_000,
   lastYear: 2028,
@@ -167,6 +172,19 @@ export const SE_TAX = {
   medicareRate: 0.029,
   /** 2026 Social Security wage base (SSA); wage-indexed, approximated by the bracket index */
   wageBase2026: 184_500,
+};
+
+/**
+ * §3101(b)(2) Additional Medicare Tax: 0.9% on SE earnings over the threshold.
+ * Thresholds are statutorily frozen (not indexed), uncapped, and the extra
+ * 0.9% is NOT part of the half-SECA deduction.
+ */
+export const ADDITIONAL_MEDICARE = {
+  rate: 0.009,
+  threshold: { single: 200_000, hoh: 200_000, mfs: 125_000, mfj: 250_000 } as Record<
+    FilingStatus,
+    number
+  >,
 };
 
 export const TAX_DATA_LABEL = "Tax data: 2026 (Rev. Proc. 2025-32 + OBBBA)";
