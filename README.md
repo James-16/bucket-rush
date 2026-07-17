@@ -27,7 +27,7 @@ change your mind.
 
 ## Status: M1 — Fire Season
 
-- [x] Engine ported with all tests (71 total)
+- [x] Engine ported with all tests (84 total)
 - [x] Five live tanks (IOU / Freedom / Wallet / Offshore Vault / Kid Jar)
 - [x] Sam's shadow slice — his cut of the IOU tank, visible and growing
 - [x] Fire Season: yearly expense fire, tap-to-douse, real incremental tax per squirt

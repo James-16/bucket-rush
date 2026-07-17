@@ -2,9 +2,12 @@
  * Household simulation: one row per year from plan start to horizon.
  *
  * Spending order each year (shown in the Money Flow chart):
- *   1. Social Security (yours + child's) and other income
- *   2. Kids' 529 pays education-tagged expenses; the Trump account pays its
- *      configured amount inside its window (child money, capped at need)
+ *   1. Kids' 529 pays education-tagged expenses FIRST — deliberate design:
+ *      earmarked money meets its earmarked purpose before household income
+ *      does (non-education 529 exits would be taxed and penalized). Child SS
+ *      and the Trump account pay household costs inside their windows.
+ *   2. Social Security and other income — plus the forced RMD once it
+ *      starts — cover the remaining need before any elective asset sale.
  *   3. Spouse bucket — EITHER here ("spouse first": delay US-taxable
  *      withdrawals) or after the IRA (default: preserve spouse assets)
  *   4. Taxable & cash bucket (only the gain share is taxed)
@@ -159,7 +162,14 @@ export function simulate(profile: Profile, returnSampler?: ReturnSampler): SimRe
     //    money does — estimated with no bucket draws yet, so the estimate is
     //    exact except when realized gains later shift the tax.
     const spouseAvailable = () => Math.max(0, balances.spouse - profile.spouseReserveFloor);
-    const incomeAfterTax = Math.max(0, ssBenefit + otherIncome - taxFor(ctx, 0, 0, true, age).tax);
+    // The RMD is forced cash — it exists whether or not anything is sold, so
+    // it counts as income here. Otherwise a year could realize taxable gains
+    // and then sweep the surplus RMD right back into the same bucket.
+    const rmd = Math.min(balances.traditional, rmdFor(age, rmdAge, balances.traditional));
+    const incomeAfterTax = Math.max(
+      0,
+      ssBenefit + otherIncome + rmd - taxFor(ctx, rmd, 0, true, age).tax,
+    );
     let fromSpouse = 0;
     if (profile.spousePriority === "beforeTraditional") {
       fromSpouse = Math.min(spouseAvailable(), Math.max(0, need - incomeAfterTax));
@@ -168,13 +178,13 @@ export function simulate(profile: Profile, returnSampler?: ReturnSampler): SimRe
     }
 
     // 4. taxable bucket — cashNeed is what income + US buckets must now cover.
-    //    Sell only enough that after-tax income + proceeds meet the need;
-    //    selling the gross need would realize gains on dollars income already
-    //    covers, then sweep the excess straight back into the same bucket.
+    //    Sell only enough that after-tax income + RMD + proceeds meet the
+    //    need; selling the gross need would realize gains on dollars income
+    //    already covers, then sweep the excess straight back into the bucket.
     const cashNeed = need;
     const gainShare = Math.max(0, Math.min(100, profile.taxableGainPortionPct)) / 100;
     const deliveredFromTaxable = (amount: number) =>
-      ssBenefit + otherIncome + amount - taxFor(ctx, 0, amount * gainShare, true, age).tax;
+      ssBenefit + otherIncome + rmd + amount - taxFor(ctx, rmd, amount * gainShare, true, age).tax;
     let fromTaxable = 0;
     if (deliveredFromTaxable(0) < cashNeed && balances.taxable > 0) {
       let low = 0;
@@ -189,8 +199,8 @@ export function simulate(profile: Profile, returnSampler?: ReturnSampler): SimRe
     balances.taxable -= fromTaxable;
     const realizedGains = fromTaxable * gainShare;
 
-    // 5. traditional — RMD forced, optionally fill bracket, then cover remaining need net of tax
-    const rmd = Math.min(balances.traditional, rmdFor(age, rmdAge, balances.traditional));
+    // 5. traditional — RMD forced (computed above), optionally fill bracket,
+    //    then cover remaining need net of tax
     let fillTarget = 0;
     if (profile.fillBracketWithdrawals) {
       fillTarget = Math.min(
@@ -248,6 +258,8 @@ export function simulate(profile: Profile, returnSampler?: ReturnSampler): SimRe
 
     // 8. Roth conversion window (after spending; RMDs can never be converted)
     let conversion = 0;
+    let conversionToRoth = 0;
+    let conversionExtraGains = 0;
     let conversionTaxFromTaxable = 0;
     let conversionTaxFromSpouse = 0;
     if (
@@ -275,24 +287,54 @@ export function simulate(profile: Profile, returnSampler?: ReturnSampler): SimRe
         );
       }
       if (conversion > 1) {
-        // penalty applies to the spending withdrawal only — never the conversion
-        const withConversion = taxFor(ctx, fromTraditional + conversion, realizedGains, true, age, fromTraditional);
-        const conversionTax = Math.max(0, withConversion.tax - taxResult.tax);
-        // pay conversion tax from the taxable bucket, then (if opted in) from
-        // spouse assets above the reserve floor; whatever is still short
-        // shaves the conversion
-        const paidFromTaxable = Math.min(balances.taxable, conversionTax);
+        // Fixed-point solve, because two things feed back into the tax:
+        //  - paying the toll from the taxable bucket SELLS assets, realizing
+        //    the configured gain share (tax on the tax);
+        //  - whatever the wallet/vault can't cover is skimmed from the pour,
+        //    and skimmed dollars never reach Roth — they are a plain
+        //    DISTRIBUTION, so before 59.5 they owe the 10% penalty
+        //    (§72(t) exempts only amounts actually converted).
+        let skim = 0;
+        let extraGains = 0;
+        let paidFromTaxable = 0;
+        let paidFromSpouse = 0;
+        let withConversion = taxResult;
+        for (let iteration = 0; iteration < 40; iteration += 1) {
+          withConversion = taxFor(
+            ctx,
+            fromTraditional + conversion,
+            realizedGains + extraGains,
+            true,
+            age,
+            fromTraditional + skim,
+          );
+          const conversionTax = Math.max(0, withConversion.tax - taxResult.tax);
+          paidFromTaxable = Math.min(balances.taxable, conversionTax);
+          paidFromSpouse =
+            profile.conversion.taxSource === "taxableThenSpouse"
+              ? Math.min(spouseAvailable(), conversionTax - paidFromTaxable)
+              : 0;
+          const nextSkim = Math.min(
+            conversion,
+            Math.max(0, conversionTax - paidFromTaxable - paidFromSpouse),
+          );
+          const nextExtraGains = paidFromTaxable * gainShare;
+          const settled =
+            Math.abs(nextSkim - skim) < 0.01 && Math.abs(nextExtraGains - extraGains) < 0.01;
+          skim = nextSkim;
+          extraGains = nextExtraGains;
+          if (settled) break;
+        }
         balances.taxable -= paidFromTaxable;
         conversionTaxFromTaxable = paidFromTaxable;
-        if (profile.conversion.taxSource === "taxableThenSpouse") {
-          conversionTaxFromSpouse = Math.min(spouseAvailable(), conversionTax - paidFromTaxable);
-          balances.spouse -= conversionTaxFromSpouse;
-        }
-        const shortTax = conversionTax - paidFromTaxable - conversionTaxFromSpouse;
+        conversionTaxFromSpouse = paidFromSpouse;
+        balances.spouse -= paidFromSpouse;
+        conversionExtraGains = extraGains;
+        conversionToRoth = conversion - skim;
         balances.traditional -= conversion;
-        balances.roth += Math.max(0, conversion - shortTax);
+        balances.roth += conversionToRoth;
         taxResult = withConversion;
-        totals.conversions += conversion;
+        totals.conversions += conversionToRoth;
       } else {
         conversion = 0;
       }
@@ -325,12 +367,13 @@ export function simulate(profile: Profile, returnSampler?: ReturnSampler): SimRe
       fromTraditional,
       rmd: Math.min(rmd, fromTraditional),
       conversion,
+      conversionToRoth,
       fromRoth,
       fromSpouse,
       fromKids,
       fromTrump,
       surplusReinvested,
-      realizedGains,
+      realizedGains: realizedGains + conversionExtraGains,
       conversionTaxFromTaxable,
       conversionTaxFromSpouse,
       tax: taxResult.tax,

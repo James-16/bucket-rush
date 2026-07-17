@@ -104,6 +104,10 @@ export type Profile = {
   childBirthYears: number[];
 
   balances: Record<BucketKey, number>;
+  /** first tax year any Roth IRA was funded — drives the account-level 5-year
+   *  qualification clock for earnings; omitted + nonzero starting Roth means
+   *  "assume it predates the plan by 5+ years" */
+  rothFirstContributionYear?: number;
   returnsPct: Record<BucketKey, number>;
   /** optional age-banded overrides of returnsPct */
   returnPhases: ReturnPhase[];
@@ -163,7 +167,11 @@ export type YearRow = {
   fromTaxable: number;
   fromTraditional: number;
   rmd: number;
+  /** gross amount distributed from traditional for conversion */
   conversion: number;
+  /** the part that actually landed in Roth — the rest was skimmed for tax
+   *  (a plain distribution: penalized before 59.5, never "converted") */
+  conversionToRoth: number;
   fromRoth: number;
   fromSpouse: number;
   fromKids: number;

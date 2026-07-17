@@ -519,3 +519,83 @@ describe("conversion tax source", () => {
     expect(floor.rows[0].conversionTaxFromSpouse).toBe(0);
   });
 });
+
+describe("conversion skim is a distribution, not a conversion", () => {
+  const skimSetup = {
+    planStartAge: 58,
+    spousePriority: "beforeTraditional" as const,
+    balances: { traditional: 800_000, roth: 0, taxable: 0, spouse: 3_000_000, kids: 0, trump: 0 },
+    conversion: {
+      mode: "fixed" as const,
+      fixedAmount: 100_000,
+      bracketCeiling: 0.22,
+      startAge: 58,
+      endAge: 74,
+      taxSource: "taxable" as const,
+    },
+  };
+
+  it("reports gross vs net and routes only the net into Roth", () => {
+    const first = simulate(makeProfile(skimSetup)).rows[0];
+    expect(first.conversion).toBe(100_000);
+    expect(first.conversionToRoth).toBeGreaterThan(0);
+    expect(first.conversionToRoth).toBeLessThan(first.conversion);
+    // Roth got exactly the net, then one year of 5% growth
+    expect(first.balances.roth).toBeCloseTo(first.conversionToRoth * 1.05, 0);
+  });
+
+  it("charges the 10% penalty on skimmed dollars before 59.5, not after", () => {
+    const rows = simulate(makeProfile(skimSetup)).rows;
+    const at58 = rows[0];
+    // spouse covers all spending, so the ONLY early distribution is the skim
+    expect(at58.fromTraditional).toBe(0);
+    expect(at58.penalty).toBeGreaterThan(0);
+    expect(at58.penalty).toBeCloseTo((at58.conversion - at58.conversionToRoth) * 0.1, 0);
+    const at60 = rows.find((row) => row.age === 60)!;
+    expect(at60.conversionToRoth).toBeLessThan(at60.conversion); // still skimmed
+    expect(at60.penalty).toBe(0); // but no longer penalized
+  });
+});
+
+describe("RMD cash is counted before taxable sales", () => {
+  it("sells nothing from taxable when SS + RMD cover spending", () => {
+    const profile = makeProfile({
+      planStartAge: 75,
+      baseSpending: 40_000,
+      extraExpenses: [],
+      balances: { traditional: 1_500_000, roth: 0, taxable: 500_000, spouse: 0, kids: 0, trump: 0 },
+    });
+    const first = simulate(profile).rows[0];
+    expect(first.rmd).toBeGreaterThan(40_000); // 1.5M / 24.6 ≈ 61k
+    expect(first.fromTaxable).toBe(0); // the forced RMD already covers spending
+    expect(first.realizedGains).toBe(0); // so no avoidable gains are realized
+    expect(first.surplusReinvested).toBeGreaterThan(0); // excess RMD sweeps to taxable
+  });
+});
+
+describe("selling taxable assets to pay conversion tax realizes gains", () => {
+  it("adds the toll sale's gain share to realized gains", () => {
+    const profile = makeProfile({
+      planStartAge: 60,
+      taxableGainPortionPct: 100,
+      spousePriority: "beforeTraditional",
+      balances: { traditional: 800_000, roth: 0, taxable: 500_000, spouse: 3_000_000, kids: 0, trump: 0 },
+      conversion: {
+        mode: "fixed",
+        fixedAmount: 100_000,
+        bracketCeiling: 0.22,
+        startAge: 60,
+        endAge: 74,
+        taxSource: "taxable",
+      },
+    });
+    const first = simulate(profile).rows[0];
+    // spouse covers spending, so the only taxable-bucket sale is the toll
+    expect(first.fromTaxable).toBe(0);
+    expect(first.conversionTaxFromTaxable).toBeGreaterThan(0);
+    // 100% gain share: every toll dollar sold is a realized gain
+    expect(first.realizedGains).toBeCloseTo(first.conversionTaxFromTaxable, 0);
+    // the wallet covered the (self-referential) toll — nothing was skimmed
+    expect(first.conversionToRoth).toBe(100_000);
+  });
+});

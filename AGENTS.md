@@ -46,10 +46,12 @@ This repo is one of a **pair** maintained and reviewed **separately**:
 
 ## Known open review findings (Codex, July 2026)
 
-- Mid-game `refreshForecast` restarts spending inflation and SS COLA from
-  year zero — wrong survival signal late in a run.
-- Re-simulating mid-fire double-counts the partially spent year.
-- `profile.liquidityEvents` appear in forecasts but never hit the live
-  tanks.
-- Latent: `GameSim.setPourPlan` rewrites completed history (GameSim is
-  unused today).
+- Resolved 2026-07-17: forecast now runs from `LiveSim.yearStartSnapshot`
+  with inflation/COLA baked into the rebased profile (no restart, no
+  mid-fire double-count); liquidity events land in `beginYear`; pour skims
+  are distributions (bouncer pre-59.5, wallet toll sales realize gains);
+  Roth earnings need the account 5-year clock (`rothFirstContributionYear`);
+  fire/Time-River label collision fixed; dead `GameSim` removed.
+- Still open: no keyboard/screen-reader control surface (canvas-only);
+  portrait-mobile layout unusable (Phaser FIT only); after-tax ending
+  wealth nets only traditional terminal tax.

@@ -4,7 +4,7 @@ import { simulate } from "../model/simulate";
 import type { BucketKey, SimResult } from "../model/types";
 import { moneyShort } from "../util/money";
 import { BUCKET_STYLE, NEON } from "./palette";
-import { LiveSim, type PourPlan } from "./liveSim";
+import { LiveSim, rebasedForecastProfile, type PourPlan } from "./liveSim";
 import { demoProfile } from "./sim";
 import { SFX, unlockAudio } from "./zzfx";
 
@@ -75,22 +75,10 @@ export class MainScene extends Phaser.Scene {
   }
 
   private refreshForecast() {
-    const profile = {
-      ...this.live.profile,
-      planStartAge: Math.floor(this.live.age),
-      balances: { ...this.live.balances },
-      conversion:
-        this.live.pourPlan === "off"
-          ? { ...this.live.profile.conversion, mode: "none" as const }
-          : {
-              mode: "bracketFill" as const,
-              fixedAmount: 0,
-              bracketCeiling: this.live.pourPlan === "fill12" ? 0.12 : 0.22,
-              startAge: Math.floor(this.live.age),
-              endAge: 74,
-              taxSource: this.live.profile.conversion.taxSource,
-            },
-    };
+    // Start-of-year snapshot, never mid-fire balances: a plan change during
+    // Fire Season replays the CURRENT year from January 1 on autopilot —
+    // a clean counterfactual, not a continuation of this year's squirts.
+    const profile = rebasedForecastProfile(this.live, this.live.pourPlan);
     this.forecast = simulate(profile);
     this.forecastStartAge = profile.planStartAge;
     for (const style of BUCKET_STYLE) {
@@ -130,12 +118,16 @@ export class MainScene extends Phaser.Scene {
     if (end.poured > 500) {
       SFX.pour();
       SFX.coin();
+      // honest accounting: only `landed` reached Freedom; any skim stayed with Sam
+      const skim = end.poured - end.landed;
       this.samSay(
-        end.tollFromVault > 500
-          ? end.tollFromVault >= end.pourToll - 1
-            ? `poured ${moneyShort(end.poured)} → Freedom. Vault paid my ${moneyShort(end.pourToll)} toll.`
-            : `poured ${moneyShort(end.poured)} → Freedom. Vault chipped in ${moneyShort(end.tollFromVault)}; I skimmed the rest.`
-          : `poured ${moneyShort(end.poured)} → Freedom. Toll ${moneyShort(end.pourToll)}.`,
+        skim < 500
+          ? end.tollFromVault > 500
+            ? `poured ${moneyShort(end.landed)} → Freedom. Vault paid my ${moneyShort(end.pourToll)} toll.`
+            : `poured ${moneyShort(end.landed)} → Freedom. Toll ${moneyShort(end.pourToll)}.`
+          : end.tollFromVault > 500
+            ? `poured ${moneyShort(end.poured)} — ${moneyShort(end.landed)} reached Freedom. Vault chipped in ${moneyShort(end.tollFromVault)}; I skimmed ${moneyShort(skim)}.`
+            : `poured ${moneyShort(end.poured)} — only ${moneyShort(end.landed)} reached Freedom. I skimmed ${moneyShort(skim)}.`,
       );
     }
     if (this.live.gameOver) return this.endRun();
@@ -469,11 +461,12 @@ export class MainScene extends Phaser.Scene {
     g.clear();
     g.fillStyle(NEON.panel, 1);
     g.fillRoundedRect(24, STRIP_Y - 12, W - 48, STRIP_H + 24, 10);
+    // right of center: the fire label owns the band around x=400 at this height
     this.labelOnce(
       "strip-title",
-      W / 2,
-      STRIP_Y - 32,
-      "THE TIME RIVER — autopilot forecast from today, re-drawn when you change the pour plan",
+      940,
+      STRIP_Y - 28,
+      "THE TIME RIVER — start-of-year forecast, re-drawn when you change plans",
       0x5a6b8c,
       "12px",
     );

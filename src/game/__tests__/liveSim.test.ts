@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { demoProfile } from "../sim";
-import { LiveSim } from "../liveSim";
+import { LiveSim, rebasedForecastProfile } from "../liveSim";
+import { simulate } from "../../model/simulate";
 
 function freshSim() {
   const profile = demoProfile();
@@ -126,6 +127,159 @@ describe("the bouncer guards the Freedom Tank (§408A 5-year conversion rule)", 
   });
 });
 
+describe("Roth earnings need the account 5-year clock, not just 59.5", () => {
+  it("taxes earnings drawn after 59.5 from a Roth born in-game", () => {
+    // childless single filer: no CTC to absorb the small earnings tax, and a
+    // consistent filing status once the child is removed
+    const profile = demoProfile();
+    profile.childBirthYears = [];
+    profile.filingStatus = "single";
+    const sim = new LiveSim(profile);
+    sim.pourPlan = "fill12";
+    sim.beginYear(); // 58 — first conversion starts the account clock
+    while (sim.fireRemaining > 1) {
+      if (sim.squirt("spouse", sim.fireRemaining).gross <= 0) break;
+    }
+    sim.endYear();
+    sim.pourPlan = "off";
+    sim.beginYear(); // 59
+    sim.endYear();
+    sim.beginYear(); // 60 — past 59.5, but the account is only 2 tax years old
+    const everything = sim.squirt("roth", sim.available("roth"));
+    expect(everything.bouncerTook).toBe(0); // no 10% after 59.5
+    expect(everything.samTook).toBeGreaterThan(0); // but earnings are still ordinary income
+  });
+
+  it("assumes a pre-existing Roth is seasoned — earnings free at 59.5+", () => {
+    const profile = demoProfile();
+    profile.planStartAge = 60;
+    profile.balances = { ...profile.balances, roth: 50_000 };
+    const sim = new LiveSim(profile);
+    sim.beginYear();
+    sim.endYear(); // growth creates earnings beyond the old-money basis
+    sim.beginYear();
+    const everything = sim.squirt("roth", sim.available("roth"));
+    expect(everything.gross).toBeGreaterThan(50_000);
+    expect(everything.samTook).toBe(0);
+    expect(everything.bouncerTook).toBe(0);
+  });
+});
+
+describe("liquidity events reach the live game (engine parity)", () => {
+  it("lands an inheritance on its bucket at the event age", () => {
+    const profile = demoProfile();
+    profile.liquidityEvents = [{ id: 1, label: "Inheritance", amount: 100_000, age: 59, bucket: "taxable" }];
+    const sim = new LiveSim(profile);
+    sim.beginYear(); // 58 — not yet
+    sim.endYear();
+    const beforeEvent = sim.balances.taxable;
+    sim.beginYear(); // 59 — event lands
+    expect(sim.balances.taxable).toBeCloseTo(beforeEvent + 100_000, 0);
+  });
+
+  it("a one-time purchase can't overdraw its bucket", () => {
+    const profile = demoProfile();
+    profile.liquidityEvents = [{ id: 1, label: "Boat", amount: -99_999_999, age: 58, bucket: "taxable" }];
+    const sim = new LiveSim(profile);
+    sim.beginYear();
+    expect(sim.balances.taxable).toBe(0);
+  });
+});
+
+describe("year-start snapshot (the forecast's honest base)", () => {
+  it("ignores mid-year squirts and rolls forward at year end", () => {
+    const sim = freshSim();
+    expect(sim.yearStartSnapshot.age).toBe(58);
+    sim.beginYear();
+    sim.squirt("spouse", 10_000);
+    expect(sim.yearStartSnapshot.balances.spouse).toBe(250_000); // squirts don't rewrite the base
+    sim.endYear();
+    expect(sim.yearStartSnapshot.yearIndex).toBe(1);
+    expect(sim.yearStartSnapshot.age).toBe(59);
+    expect(sim.yearStartSnapshot.balances.spouse).toBeCloseTo((250_000 - 10_000) * 1.05, 0);
+  });
+});
+
+describe("the Wallet's toll sale realizes gains (LiveSim, per James's decision)", () => {
+  function pourWithGainShare(pct: number) {
+    const profile = demoProfile();
+    profile.planStartAge = 60; // past 59.5: no bouncer noise in the toll
+    profile.taxableGainPortionPct = pct;
+    profile.balances = { ...profile.balances, taxable: 500_000, spouse: 3_000_000 };
+    const sim = new LiveSim(profile);
+    sim.pourPlan = "fill12";
+    sim.beginYear();
+    while (sim.fireRemaining > 1) {
+      if (sim.squirt("spouse", sim.fireRemaining).gross <= 0) break;
+    }
+    const walletBefore = sim.balances.taxable;
+    const end = sim.endYear();
+    // endYear grows the wallet 5% after the toll came out
+    const fromWallet = walletBefore - sim.balances.taxable / 1.05;
+    return { end, fromWallet };
+  }
+
+  it("a 100% gain share pays a larger fixed-point toll than 0%", () => {
+    const flat = pourWithGainShare(0);
+    const gainy = pourWithGainShare(100);
+    expect(gainy.end.pourToll).toBeGreaterThan(flat.end.pourToll + 100);
+    // the wallet covered the whole toll both times — nothing skimmed
+    expect(flat.end.landed).toBeCloseTo(flat.end.poured, 0);
+    expect(gainy.end.landed).toBeCloseTo(gainy.end.poured, 0);
+    expect(flat.fromWallet).toBeCloseTo(flat.end.pourToll, 0);
+    expect(gainy.fromWallet).toBeCloseTo(gainy.end.pourToll, 0);
+  });
+});
+
+describe("rebasedForecastProfile keeps the economy's timeline", () => {
+  it("bakes 10 years of inflation and COLA into the rebased base amounts", () => {
+    const sim = freshSim();
+    sim.beginYear();
+    for (let year = 0; year < 10; year += 1) {
+      while (sim.fireRemaining > 1) {
+        if (sim.squirt("spouse", sim.fireRemaining).gross <= 0) break;
+      }
+      sim.endYear();
+      sim.beginYear();
+    }
+    const p = sim.profile;
+    const profile = rebasedForecastProfile(sim, "off");
+    expect(profile.planStartAge).toBe(68);
+    const first = simulate(profile).rows[0];
+    const school = p.extraExpenses[0];
+    const expected =
+      p.baseSpending * (1 + p.spendingInflationPct / 100) ** 10 +
+      school.annualAmount * (1 + school.inflationPct / 100) ** (68 - school.startAge);
+    // the forecast's first year matches the live economy exactly — no restart
+    expect(first.spending).toBeCloseTo(expected, 0);
+  });
+});
+
+describe("the pour's skim is a distribution (engine parity)", () => {
+  function emptyWalletAt(planStartAge: number) {
+    const profile = demoProfile();
+    profile.planStartAge = planStartAge;
+    profile.balances = { ...profile.balances, taxable: 0, spouse: 3_000_000 };
+    const sim = new LiveSim(profile);
+    sim.pourPlan = "fill12";
+    sim.beginYear();
+    while (sim.fireRemaining > 1) {
+      if (sim.squirt("spouse", sim.fireRemaining).gross <= 0) break;
+    }
+    const end = sim.endYear();
+    expect(end.poured).toBeGreaterThan(10_000);
+    return end;
+  }
+
+  it("faces the bouncer before 59.5 but not after", () => {
+    const at58 = emptyWalletAt(58);
+    const at62 = emptyWalletAt(62);
+    // wallet empty → the whole toll is skimmed; before 59.5 the skim carries
+    // an extra 10%, so the toll takes a visibly bigger bite of the pour
+    expect(at58.pourToll / at58.poured).toBeGreaterThan(at62.pourToll / at62.poured + 0.005);
+  });
+});
+
 describe("vault pays the pour toll (conversion.taxSource)", () => {
   function emptyWalletSim(taxSource: "taxable" | "taxableThenSpouse") {
     const profile = demoProfile();
@@ -148,8 +302,9 @@ describe("vault pays the pour toll (conversion.taxSource)", () => {
     const end = sim.endYear();
     expect(end.poured).toBeGreaterThan(10_000);
     expect(end.tollFromVault).toBe(0);
-    // Freedom got the pour minus the skimmed toll, then one year of growth
-    expect(sim.balances.roth).toBeCloseTo((end.poured - end.pourToll) * 1.07, -1);
+    // honest gross vs net: only `landed` reached Freedom
+    expect(end.landed).toBeCloseTo(end.poured - end.pourToll, 0);
+    expect(sim.balances.roth).toBeCloseTo(end.landed * 1.07, -1);
   });
 
   it("vault-pays-toll: full pour reaches Freedom, vault drops by the toll", () => {
@@ -158,8 +313,9 @@ describe("vault pays the pour toll (conversion.taxSource)", () => {
     const end = sim.endYear();
     expect(end.poured).toBeGreaterThan(10_000);
     expect(end.tollFromVault).toBeCloseTo(end.pourToll, 0);
-    // full pour landed in Freedom, then one year of growth
-    expect(sim.balances.roth).toBeCloseTo(end.poured * 1.07, -1);
+    // nothing skimmed: gross and landed agree
+    expect(end.landed).toBeCloseTo(end.poured, 0);
+    expect(sim.balances.roth).toBeCloseTo(end.landed * 1.07, -1);
     expect(sim.balances.spouse).toBeCloseTo((spouseBefore - end.tollFromVault) * 1.05, -1);
   });
 
