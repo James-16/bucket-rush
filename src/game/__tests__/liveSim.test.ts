@@ -175,3 +175,23 @@ describe("vault pays the pour toll (conversion.taxSource)", () => {
     expect(end.tollFromVault).toBe(0);
   });
 });
+
+describe("engine/bridge parity", () => {
+  it("income beyond the fire pools in the Wallet exactly like simulate()", async () => {
+    const { simulate } = await import("../../model/simulate");
+    const profile = demoProfile();
+    profile.balances = { traditional: 0, roth: 0, taxable: 0, spouse: 0, kids: 0, trump: 0 };
+    profile.returnsPct = { traditional: 0, roth: 0, taxable: 0, spouse: 0, kids: 0, trump: 0 };
+    profile.otherIncomeAnnual = 100_000;
+    profile.otherIncomeEndAge = 120;
+    profile.baseSpending = 10_000;
+    profile.extraExpenses = [];
+    const sim = new LiveSim(profile);
+    sim.beginYear();
+    expect(sim.fireRemaining).toBeLessThan(1); // income alone douses the fire
+    sim.endYear();
+    const engineRow = simulate(profile).rows[0];
+    expect(sim.balances.taxable).toBeGreaterThan(50_000);
+    expect(sim.balances.taxable).toBeCloseTo(engineRow.balances.taxable, -3);
+  });
+});

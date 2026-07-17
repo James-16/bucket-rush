@@ -134,7 +134,7 @@ export class LiveSim {
     this.otherIncome = this.age <= p.otherIncomeEndAge ? p.otherIncomeAnnual : 0;
     const youngest = p.childBirthYears.length ? Math.max(...p.childBirthYears) : 0;
     const childSs =
-      this.ssBenefit > 0 && youngest && this.calendarYear - youngest < 18
+      this.ssBenefit > 0 && youngest && this.calendarYear - youngest < p.childSsEndAge
         ? p.childSocialSecurityAnnual * cola
         : 0;
 
@@ -152,6 +152,9 @@ export class LiveSim {
     const incomeRain = Math.max(0, this.ssBenefit + this.otherIncome + childSs - incomeTaxAlone);
     const rainDoused = Math.min(fire, from529 + fromTrump + incomeRain);
     this.fireRemaining = Math.max(0, fire - rainDoused);
+    // rain beyond the fire pools in the Wallet — same surplus sweep as simulate()
+    const rainOverflow = Math.max(0, from529 + fromTrump + incomeRain - fire);
+    this.balances.taxable += rainOverflow;
 
     // Sam's alarm clock: forced RMD squirts itself at the fire first
     let rmdForced: SquirtResult | null = null;

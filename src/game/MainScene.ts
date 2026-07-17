@@ -64,6 +64,7 @@ export class MainScene extends Phaser.Scene {
     this.live = new LiveSim(demoProfile());
     this.live.pourPlan = "off";
     this.refreshForecast();
+    this.stylePourButtons();
     this.setInterlude(400);
   }
 
@@ -131,7 +132,9 @@ export class MainScene extends Phaser.Scene {
       SFX.coin();
       this.samSay(
         end.tollFromVault > 500
-          ? `poured ${moneyShort(end.poured)} → Freedom. Vault paid my ${moneyShort(end.pourToll)} toll.`
+          ? end.tollFromVault >= end.pourToll - 1
+            ? `poured ${moneyShort(end.poured)} → Freedom. Vault paid my ${moneyShort(end.pourToll)} toll.`
+            : `poured ${moneyShort(end.poured)} → Freedom. Vault chipped in ${moneyShort(end.tollFromVault)}; I skimmed the rest.`
           : `poured ${moneyShort(end.poured)} → Freedom. Toll ${moneyShort(end.pourToll)}.`,
       );
     }
